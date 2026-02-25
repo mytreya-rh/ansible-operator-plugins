@@ -29,15 +29,9 @@ RUN python3 -m pip install pipenv==2023.11.15 \
   && pip-compile --output-file=./requirements.txt ./requirements.in --strip-extras \
   # NOTE: Comment out ansible-core, ansible-runner, ansible-runner-http, and
   # requests-unixsocket from `requirements.txt` to avoid running
-  # `pip_find_builddeps.py` script against these.
-  # These are required to properly resolve dependency conflicts:
-  #   1. Resolve conflict with `setuptools` version:
-  #     - `setuptools>=70.1` is required by ansible-core (via markupsafe).
-  #     - `setuptools<=69.0.2,>=45` is required by ansible-runner.
-  #     - `setuptools>=77.0.3` is required by charset-normalizer (via types-psutil).
-  #   2. Resolve conflict with `setuptools_scm` version:
-  #     - `setuptools_scm>=8` is required by requests-unixsocket.
-  #     - `setuptools_scm<8` is required by kubernetes.
+  # `pip_find_builddeps.py` against these (setuptools/setuptools-scm conflicts).
+  # kubernetes 35.x is left in; cryptography/cffi/pycparser/maturin are commented
+  # for OSBS (installed via rpms).
   && sed -i '/ansible-core==/s/^/#/g' ./requirements.txt \
   && sed -i '/ansible-runner==/s/^/#/g' ./requirements.txt \
   && sed -i '/ansible-runner-http==/s/^/#/g' ./requirements.txt \
@@ -49,13 +43,18 @@ RUN python3 -m pip install pipenv==2023.11.15 \
   && sed -i '/cffi==/s/^/#/g' ./requirements.txt \
   && sed -i '/pycparser==/s/^/#/g' ./requirements.txt \
   && sed -i '/maturin==/s/^/#/g' ./requirements.txt \
-  && ./pip_find_builddeps.py requirements.txt -o requirements-build.in --append \
-  # Uncomment ansible-core, ansible-runner, ansible-runner-http and requests-unixsocket,
-  # so that they are re-enabled in the requirements.txt file.
+  # Use --allow-binary so pip does not force build-from-source; without it we hit setuptools-scm
+  # conflicts during resolution.
+  && ./pip_find_builddeps.py requirements.txt -o requirements-build.in --append --allow-binary \
+  # Uncomment the above packages so they are re-enabled in requirements.txt.
   && sed -i '/ansible-core==/s/^#//g' ./requirements.txt \
   && sed -i '/ansible-runner==/s/^#//g' ./requirements.txt \
   && sed -i '/ansible-runner-http==/s/^#//g' ./requirements.txt \
   && sed -i '/requests-unixsocket==/s/^#//g' ./requirements.txt \
+  # Resolve setuptools-scm conflict: remove any setuptools-scm from build deps and pin >=8.
+  && sed -i '/^setuptools-scm$/d' ./requirements-build.in \
+  && sed -i '/^setuptools_scm$/d' ./requirements-build.in \
+  && echo 'setuptools-scm>=8' >> ./requirements-build.in \
   && pip-compile --output-file=./requirements-build.txt ./requirements-build.in --strip-extras --allow-unsafe \
   # NOTE: Comment out cryptography and its dependencies from the requirements-build.txt
   # files as these packages can't be installed in the isolated environment of OSBS image
@@ -68,7 +67,10 @@ RUN python3 -m pip install pipenv==2023.11.15 \
   # into the requirements-build1.in file.
   && grep "ansible-core==" ./requirements.in >> ./requirements-build1-temp.in || true \
   && ./pip_find_builddeps.py requirements-build1-temp.in -o requirements-build1.in --append \
+  && (sed -i '/^setuptools-scm$/d' ./requirements-build1.in; sed -i '/^setuptools_scm$/d' ./requirements-build1.in; echo 'setuptools-scm>=8' >> ./requirements-build1.in) \
   && pip-compile --output-file=./requirements-build1.txt ./requirements-build1.in --strip-extras --allow-unsafe \
+  # Pin wheel to 0.46.3+ for CVE-2026-24049 (requirements-build1 is installed after requirements-pre-build, so this wins).
+  && sed -i 's/^wheel==[0-9.]*$/wheel==0.46.3/' ./requirements-build1.txt \
   # NOTE: Comment out cryptography and its dependencies from the requirements-build1.txt
   # files as these packages can't be installed in the isolated environment of OSBS
   # image build. These packages will be installed through rpms.
@@ -83,7 +85,12 @@ RUN python3 -m pip install pipenv==2023.11.15 \
   # build dependencies of some packages in requirements-build.txt file.
   && grep "flit-core==" ./requirements-build.txt >> ./requirements-pre-build.in || true \
   && ./pip_find_builddeps.py requirements-pre-build-temp.in -o requirements-pre-build.in --append \
-  && pip-compile --output-file=./requirements-pre-build.txt ./requirements-pre-build.in --strip-extras --allow-unsafe
+  && (sed -i '/^setuptools-scm$/d' ./requirements-pre-build.in; sed -i '/^setuptools_scm$/d' ./requirements-pre-build.in; echo 'setuptools-scm>=8' >> ./requirements-pre-build.in) \
+  && pip-compile --output-file=./requirements-pre-build.txt ./requirements-pre-build.in --strip-extras --allow-unsafe \
+  # So the Cachito bundle contains wheel 0.45.1 for PEP 517 isolated builds (e.g. ansible-core
+  # requires wheel==0.45.1). requirements-build1.txt pins wheel==0.46.3 (CVE); install order
+  # (pre-build then build1) leaves the main env on 0.46.3.
+  && sed -i 's/^wheel==[0-9.]*$/wheel==0.45.1/' ./requirements-pre-build.txt
 
 VOLUME /tmp/requirements
 ENTRYPOINT ["cp", "./requirements.txt", "./requirements-build.txt",  "./requirements-build1.txt", "./requirements-pre-build.txt", "/tmp/requirements/"]
