@@ -27,7 +27,7 @@ semver==3.0.4
     #   changelog-chug
 setuptools-scm==8.1.0
     # via -r requirements-pre-build.in
-wheel==0.46.3
+wheel==0.45.1
     # via -r requirements-pre-build.in
 
 # The following packages are considered to be unsafe in a requirements file:
